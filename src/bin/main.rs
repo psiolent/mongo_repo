@@ -1,4 +1,4 @@
-use mongo_test::{
+use mongo_repo::{
     common::Id,
     items::{Item, MongoItemsRepo},
     storage::Repository,
