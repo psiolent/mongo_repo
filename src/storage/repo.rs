@@ -3,10 +3,10 @@ use async_trait::async_trait;
 use std::error::Error;
 
 #[async_trait]
-pub trait Repository<E: Entity>: Clone {
+pub trait Repo<E: Entity, S> {
     type RepoError: Error;
 
-    async fn insert(&self, entity: &E) -> Result<bool, Self::RepoError>;
+    async fn create(&self, spec: &S) -> Result<Id, Self::RepoError>;
 
     async fn update(&self, entity: &E) -> Result<bool, Self::RepoError>;
 
@@ -14,7 +14,7 @@ pub trait Repository<E: Entity>: Clone {
 
     async fn retrieve(&self, id: &Id) -> Result<Option<E>, Self::RepoError>;
 
-    async fn retrieve_page(&self, offset: usize, limit: usize) -> Result<Vec<E>, Self::RepoError>;
+    async fn retrieve_all(&self) -> Result<Vec<E>, Self::RepoError>;
 }
 
 pub trait RepoError: Error {}

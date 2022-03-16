@@ -1,17 +1,26 @@
+use std::fmt::Display;
+
+use mongodb::bson::{oid::ObjectId, Bson};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct Id(Uuid);
+#[serde(transparent)]
+pub struct Id(ObjectId);
 
-impl Id {
-    pub fn new() -> Self {
-        Id(Uuid::new_v4())
+impl Display for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
-impl Default for Id {
-    fn default() -> Self {
-        Self::new()
+impl From<ObjectId> for Id {
+    fn from(oid: ObjectId) -> Self {
+        Id(oid)
+    }
+}
+
+impl From<Id> for Bson {
+    fn from(id: Id) -> Self {
+        Bson::ObjectId(id.0)
     }
 }
