@@ -10,6 +10,10 @@ pub struct Item {
 }
 
 impl Item {
+    pub fn new(id: Id, name: String) -> Self {
+        Self { id, name }
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }

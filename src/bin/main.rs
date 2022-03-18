@@ -1,4 +1,5 @@
 use mongo_repo::{
+    api::ApiServer,
     common::Entity,
     items::{ItemSpec, MongoItemsRepo},
     storage::{MongoRepoError, Repo},
@@ -8,6 +9,12 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
+    let api_server = ApiServer {
+        bind_addr: "127.0.0.1:8080".parse().unwrap(),
+    };
+
+    api_server.run().await;
+
     if let Err(e) = test_items_repo().await {
         println!("{:?}", e);
     }

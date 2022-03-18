@@ -1,6 +1,6 @@
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
 
-use mongodb::bson::{oid::ObjectId, Bson};
+use mongodb::bson::{self, oid::ObjectId, Bson};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -22,5 +22,13 @@ impl From<ObjectId> for Id {
 impl From<Id> for Bson {
     fn from(id: Id) -> Self {
         Bson::ObjectId(id.0)
+    }
+}
+
+impl FromStr for Id {
+    type Err = bson::oid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(ObjectId::parse_str(s)?.into())
     }
 }
