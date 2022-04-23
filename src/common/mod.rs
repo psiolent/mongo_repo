@@ -1,5 +1,3 @@
-pub use entity::*;
-pub use id::*;
-
-mod entity;
-mod id;
+pub mod entity;
+pub mod id;
+pub mod name;

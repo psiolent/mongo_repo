@@ -1,65 +1,71 @@
-use crate::api::{Context, Mutation, Query};
-use crate::items::MongoItemsRepo;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Response, Server, StatusCode};
+use crate::api::{
+    context::{Context, ContextFactory},
+    schema::{Mutation, Query},
+};
+use futures::Future;
+use hyper::{
+    service::{make_service_fn, service_fn},
+    Body, Method, Response, Server, StatusCode,
+};
 use juniper::{EmptySubscription, RootNode};
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::sync::Arc;
+use log::{debug, error, info};
+use std::{
+    convert::Infallible,
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+};
 
-pub struct ApiServer {
-    pub bind_addr: SocketAddr,
-}
+pub const DEFAULT_BIND_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+pub const DEFAULT_BIND_PORT: u16 = 3000;
 
-impl ApiServer {
-    pub async fn run(&self) {
-        let mut client_options =
-            mongodb::options::ClientOptions::parse("mongodb://127.0.0.1:27017")
-                .await
-                .unwrap();
-        client_options.app_name = Some("Mongo+GraphQL Test".to_string());
-        let client = mongodb::Client::with_options(client_options).unwrap();
-        let items_repo = MongoItemsRepo::new("test", "items", client);
+pub async fn run_api_server(
+    bind_ip_addr: IpAddr,
+    bind_port: u16,
+    mongo_client: mongodb::Client,
+    shutdown_signal: impl Future<Output = ()>,
+) {
+    info!("starting api server");
 
-        let ctx = Arc::new(Context {
-            items_repo,
-            api_base_path: "http://192.168.6.6:4000".into(),
-        });
-        let root_node = Arc::new(RootNode::new(
-            Query,
-            Mutation,
-            EmptySubscription::<Context>::new(),
-        ));
+    let ctx_factory = ContextFactory::new(mongo_client);
+    let root_node = Arc::new(RootNode::new(
+        Query,
+        Mutation,
+        EmptySubscription::<Context>::new(),
+    ));
 
-        let make_svc = make_service_fn(move |_| {
-            let ctx = ctx.clone();
-            let root_node = root_node.clone();
+    let make_svc = make_service_fn(move |_| {
+        let ctx_factory = ctx_factory.clone();
+        let root_node = root_node.clone();
 
-            async {
-                Ok::<_, hyper::Error>(service_fn(move |req| {
-                    let ctx = ctx.clone();
-                    let root_node = root_node.clone();
-                    async {
-                        Ok::<_, Infallible>(match (req.method(), req.uri().path()) {
-                            (&Method::GET, "/") => juniper_hyper::graphiql("/graphql", None).await,
-                            (&Method::GET, "/graphql") | (&Method::POST, "/graphql") => {
-                                juniper_hyper::graphql(root_node, ctx, req).await
-                            }
-                            _ => {
-                                let mut response = Response::new(Body::empty());
-                                *response.status_mut() = StatusCode::NOT_FOUND;
-                                response
-                            }
-                        })
-                    }
-                }))
-            }
-        });
-
-        let server = Server::bind(&self.bind_addr).serve(make_svc);
-
-        if let Err(e) = server.await {
-            eprintln!("server error: {}", e);
+        async move {
+            Ok::<_, hyper::Error>(service_fn(move |req| {
+                debug!("{} {} {:?}", req.method(), req.uri(), req.version());
+                let ctx = ctx_factory.create_context();
+                let root_node = root_node.clone();
+                async move {
+                    Ok::<_, Infallible>(match (req.method(), req.uri().path()) {
+                        (&Method::GET, "/") => juniper_hyper::graphiql("/graphql", None).await,
+                        (&Method::GET, "/graphql") | (&Method::POST, "/graphql") => {
+                            juniper_hyper::graphql(root_node, Arc::new(ctx), req).await
+                        }
+                        _ => {
+                            let mut response = Response::new(Body::empty());
+                            *response.status_mut() = StatusCode::NOT_FOUND;
+                            response
+                        }
+                    })
+                }
+            }))
         }
+    });
+
+    let server = Server::bind(&(bind_ip_addr, bind_port).into())
+        .serve(make_svc)
+        .with_graceful_shutdown(shutdown_signal);
+
+    if let Err(e) = server.await {
+        error!("server error: {}", e);
     }
+
+    info!("stopped");
 }

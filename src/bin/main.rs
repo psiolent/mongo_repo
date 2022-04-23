@@ -1,104 +1,94 @@
-use mongo_repo::{
-    api::ApiServer,
-    common::Entity,
-    items::{ItemSpec, MongoItemsRepo},
-    storage::{MongoRepoError, Repo},
+use ::mongo_repo::{
+    api::{self, server::run_api_server},
+    storage::mongo_repo::{self},
 };
-use std::ops::DerefMut;
-use std::sync::Arc;
+use futures::Future;
+use log::{error, info};
+use std::{env, net::IpAddr};
+use tokio::{sync::oneshot, task::JoinHandle, try_join};
+
+const MONGO_HOST_ENV_KEY: &str = "MONGO_HOST";
+const MONGO_PORT_ENV_KEY: &str = "MONGO_PORT";
+const API_BIND_IP_ENV_KEY: &str = "API_BIND_IP";
+const API_BIND_PORT_ENV_KEY: &str = "API_BIND_PORT";
 
 #[tokio::main]
 async fn main() {
-    let api_server = ApiServer {
-        bind_addr: "127.0.0.1:8080".parse().unwrap(),
+    env_logger::init();
+
+    let (tx_shutdown, rx_shutdown) = oneshot::channel::<()>();
+    let shutdown_signal = async move {
+        rx_shutdown.await.ok();
     };
+    let api_server_handle = start_api_server(shutdown_signal);
 
-    api_server.run().await;
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to listen for Ctrl-C");
 
-    if let Err(e) = test_items_repo().await {
-        println!("{:?}", e);
+    info!("got Ctrl-C; sending shutdown signal");
+
+    tx_shutdown.send(()).ok();
+
+    match try_join!(api_server_handle) {
+        Ok(_) => (),
+        Err(e) => {
+            error!("task join error: {:?}", e);
+        }
     }
 }
 
-async fn test_items_repo() -> Result<(), MongoRepoError> {
-    // Parse a connection string into an options struct.
-    let mut client_options =
-        mongodb::options::ClientOptions::parse("mongodb://127.0.0.1:27017").await?;
-    println!("client options parsed");
+fn start_api_server(shutdown_signal: impl Future<Output = ()> + Send + 'static) -> JoinHandle<()> {
+    // get mongo info
+    let mongo_host =
+        env::var(MONGO_HOST_ENV_KEY).unwrap_or_else(|_| mongo_repo::DEFAULT_HOST.into());
+    let mongo_port = env::var(MONGO_PORT_ENV_KEY)
+        .map(|mongo_port_string| {
+            mongo_port_string
+                .parse::<u16>()
+                .unwrap_or_else(|_| panic!("invalid mongo port: {mongo_port_string}"))
+        })
+        .unwrap_or(mongo_repo::DEFAULT_PORT);
+    let mongo_connect_string = format!("mongodb://{mongo_host}:{mongo_port}");
 
-    // Manually set an option.
-    client_options.app_name = Some("Mongo Repo Test".to_string());
+    // get server bind info
+    let server_bind_ip = env::var(API_BIND_IP_ENV_KEY)
+        .map(|bind_ip_string| {
+            bind_ip_string
+                .parse::<IpAddr>()
+                .unwrap_or_else(|_| panic!("invalid bind IP address: {bind_ip_string}"))
+        })
+        .unwrap_or(api::server::DEFAULT_BIND_IP);
+    let server_bind_port = env::var(API_BIND_PORT_ENV_KEY)
+        .map(|bind_port_string| {
+            bind_port_string
+                .parse::<u16>()
+                .unwrap_or_else(|_| panic!("invalid bind port: {bind_port_string}"))
+        })
+        .unwrap_or(api::server::DEFAULT_BIND_PORT);
 
-    // Get a handle to the deployment.
-    let client = mongodb::Client::with_options(client_options)?;
+    tokio::spawn(async move {
+        // create the mongo client
+        info!("creating mongo client for {}", mongo_connect_string);
+        let mongo_client_options =
+            mongodb::options::ClientOptions::parse(mongo_connect_string.as_str())
+                .await
+                .unwrap_or_else(|e| panic!("error creating mongo client options: {:?}", e));
+        let mongo_client = mongodb::Client::with_options(mongo_client_options)
+            .unwrap_or_else(|e| panic!("error creating mongo client: {:?}", e));
 
-    let mut session = client.start_session(None).await.unwrap();
-    println!("session started");
-    session.start_transaction(None).await?;
-    println!("transaction started");
-    let session = Arc::new(tokio::sync::Mutex::new(session));
-
-    let items_repo =
-        MongoItemsRepo::new_with_session("test", "items", client.clone(), Arc::clone(&session));
-
-    let item1_spec = ItemSpec {
-        name: "An Item".into(),
-    };
-
-    let item2_spec = ItemSpec {
-        name: "Another Item".into(),
-    };
-
-    let id1 = items_repo.create(&item1_spec).await?;
-    let id2 = items_repo.create(&item2_spec).await?;
-
-    println!("created 2 docs: {} and {}", id1, id2);
-
-    let opt_doc1 = items_repo.retrieve(&id1).await?;
-
-    println!("queried doc 1: {:?}", opt_doc1);
-
-    let mut doc1 = opt_doc1.unwrap();
-
-    *doc1.name_mut() = "An Updated Item".into();
-
-    let update_success = items_repo.update(&doc1).await?;
-
-    println!("updated doc 1 successfully? {}", update_success);
-
-    let all_docs = items_repo.retrieve_all().await?;
-
-    println!("all docs: {:?}", all_docs);
-
-    let delete_success = items_repo.delete(doc1.id()).await?;
-
-    println!("delete doc 1 successfully? {}", delete_success);
-
-    let update_success = items_repo.update(&doc1).await?;
-
-    println!("updated doc 1 successfully? {}", update_success);
-
-    let opt_doc1 = items_repo.retrieve(&id1).await?;
-
-    println!("queried doc 1: {:?}", opt_doc1);
-
-    let all_docs = items_repo.retrieve_all().await?;
-
-    println!("all docs: {:?}", all_docs);
-
-    for doc in all_docs {
-        println!(
-            "delete {}: {}",
-            doc.id(),
-            items_repo.delete(doc.id()).await?
+        // start the server
+        info!(
+            "starting api server on {}:{}",
+            server_bind_ip, server_bind_port
         );
-    }
-
-    let mut session_guard = session.lock().await;
-    println!("session locked");
-    let session = session_guard.deref_mut();
-    session.commit_transaction().await?;
-    println!("transaction committed");
-
-    Ok(())
+        run_api_server(
+            server_bind_ip,
+            server_bind_port,
+            mongo_client,
+            shutdown_signal,
+        )
+        .await;
+        info!("api server stopped");
+    })
 }

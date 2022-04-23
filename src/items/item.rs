@@ -1,31 +1,34 @@
 use serde::{Deserialize, Serialize};
 
-use crate::common::{Entity, Id};
+use crate::common::{entity::Entity, id::Id, name::Name};
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub struct Item {
     #[serde(rename = "_id")]
     id: Id,
-    name: String,
+    name: Name,
+    size: ItemSize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum ItemSize {
+    Small,
+    Medium,
+    Large,
 }
 
 impl Item {
-    pub fn new(id: Id, name: String) -> Self {
-        Self { id, name }
+    pub fn new(id: Id, name: Name, size: ItemSize) -> Self {
+        Self { id, name, size }
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &Name {
         &self.name
     }
 
-    pub fn name_mut(&mut self) -> &mut String {
-        &mut self.name
+    pub fn size(&self) -> &ItemSize {
+        &self.size
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct ItemSpec {
-    pub name: String,
 }
 
 impl Entity for Item {

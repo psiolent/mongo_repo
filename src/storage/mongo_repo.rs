@@ -1,8 +1,9 @@
-use crate::common::{Entity, Id};
-use crate::storage::Repo;
+use crate::common::id::Id;
+use crate::storage::repo::{Patch, Repo};
 use async_trait::async_trait;
-use futures::stream::StreamExt;
-use mongodb::bson::{doc, Bson};
+use futures::StreamExt;
+use mongodb::bson::{doc, ser::to_document, Bson};
+use mongodb::options::FindOptions;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::error::Error;
@@ -12,68 +13,80 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-pub struct MongoRepo<E, S>
+use super::repo::{Filter, Reposable};
+
+pub const DEFAULT_HOST: &str = "127.0.0.1";
+pub const DEFAULT_PORT: u16 = 27017;
+
+pub struct MongoRepo<R: MongoReposable>
 where
-    E: Entity + Serialize + DeserializeOwned + Unpin + Send + Sync,
-    S: Serialize + Send + Sync,
+    R: DeserializeOwned,
+    R::Spec: Serialize,
+    R::Patch: Serialize,
+    R::Filter: Serialize,
 {
-    db_name: String,
-    collection_name: String,
     client: mongodb::Client,
     session: Option<Arc<Mutex<mongodb::ClientSession>>>,
-    _entity: PhantomData<E>,
-    _spec: PhantomData<S>,
+    _reposable: PhantomData<R>,
 }
 
-impl<E, S> MongoRepo<E, S>
+pub trait MongoReposable: Reposable
 where
-    E: Entity + Serialize + DeserializeOwned + Unpin + Send + Sync,
-    S: Serialize + Send + Sync,
+    Self: DeserializeOwned,
+    Self::Spec: Serialize,
+    Self::Patch: Serialize,
+    Self::Filter: Serialize,
 {
-    pub fn new(db_name: &str, collection_name: &str, client: mongodb::Client) -> Self {
+    fn db_name() -> &'static str;
+    fn collection_name() -> &'static str;
+}
+
+impl<R: MongoReposable> MongoRepo<R>
+where
+    R: DeserializeOwned,
+    R::Spec: Serialize,
+    R::Patch: Serialize,
+    R::Filter: Serialize,
+{
+    pub fn new(client: mongodb::Client) -> Self {
         Self {
-            db_name: db_name.into(),
-            collection_name: collection_name.into(),
             client,
             session: None,
-            _entity: PhantomData,
-            _spec: PhantomData,
+            _reposable: PhantomData,
         }
     }
 
     pub fn new_with_session(
-        db_name: &str,
-        collection_name: &str,
         client: mongodb::Client,
         session: Arc<Mutex<mongodb::ClientSession>>,
     ) -> Self {
         Self {
-            db_name: db_name.into(),
-            collection_name: collection_name.into(),
             client,
             session: Some(session),
-            _entity: PhantomData,
-            _spec: PhantomData,
+            _reposable: PhantomData,
         }
     }
 
     fn collection<T>(&self) -> mongodb::Collection<T> {
         self.client
-            .database(self.db_name.as_str())
-            .collection(self.collection_name.as_str())
+            .database(R::db_name())
+            .collection(R::collection_name())
     }
 }
 
 #[async_trait]
-impl<E, S> Repo<E, S> for MongoRepo<E, S>
+impl<R: MongoReposable> Repo<R> for MongoRepo<R>
 where
-    E: Entity + Serialize + DeserializeOwned + Unpin + Send + Sync,
-    S: Serialize + Send + Sync,
+    R: DeserializeOwned + Send + Sync + Unpin,
+    R::Spec: Serialize + Send + Sync,
+    R::Patch: Serialize + Send + Sync,
+    R::Filter: Serialize + Send + Sync,
 {
     type RepoError = MongoRepoError;
 
-    async fn create(&self, spec: &S) -> Result<Id, Self::RepoError> {
-        let coll = self.collection::<S>();
+    async fn create(&self, spec: &R::Spec) -> Result<Id, Self::RepoError> {
+        let coll = self.collection::<R::Spec>();
+
         let result = match self.session {
             Some(ref session) => {
                 let mut session_guard = session.lock().await;
@@ -82,30 +95,39 @@ where
             }
             None => coll.insert_one(spec, None).await?,
         };
+
         match result.inserted_id {
             Bson::ObjectId(oid) => Ok(oid.into()),
             _ => panic!("inserted ID was not an ObjectId"),
         }
     }
 
-    async fn update(&self, entity: &E) -> Result<bool, Self::RepoError> {
-        let query = doc! { "_id": entity.id() };
-        let coll = self.collection::<E>();
+    async fn update(&self, patch: &R::Patch) -> Result<bool, Self::RepoError> {
+        let mut query = R::Filter::default();
+        query.by_id(patch.update_id());
+        let query = to_document(&query)?;
+        let update = doc! { "$set": to_document(patch)? };
+        let coll = self.collection::<R>();
+
         let result = match self.session {
             Some(ref session) => {
                 let mut session_guard = session.lock().await;
                 let session = session_guard.deref_mut();
-                coll.replace_one_with_session(query, entity, None, session)
+                coll.update_one_with_session(query, update, None, session)
                     .await?
             }
-            None => coll.replace_one(query, entity, None).await?,
+            None => coll.update_one(query, update, None).await?,
         };
+
         Ok(result.modified_count > 0)
     }
 
     async fn delete(&self, id: &Id) -> Result<bool, Self::RepoError> {
-        let query = doc! { "_id": id };
-        let coll = self.collection::<E>();
+        let mut query = R::Filter::default();
+        query.by_id(id);
+        let query = to_document(&query)?;
+        let coll = self.collection::<R>();
+
         let result = match self.session {
             Some(ref session) => {
                 let mut session_guard = session.lock().await;
@@ -114,12 +136,16 @@ where
             }
             None => coll.delete_one(query, None).await?,
         };
+
         Ok(result.deleted_count > 0)
     }
 
-    async fn retrieve(&self, id: &Id) -> Result<Option<E>, Self::RepoError> {
-        let filter = doc! { "_id": id };
-        let coll = self.collection::<E>();
+    async fn retrieve(&self, id: &Id) -> Result<Option<R>, Self::RepoError> {
+        let mut filter = R::Filter::default();
+        filter.by_id(id);
+        let filter = to_document(&filter)?;
+        let coll = self.collection::<R>();
+
         match self.session {
             Some(ref session) => {
                 let mut session_guard = session.lock().await;
@@ -130,13 +156,23 @@ where
         }
     }
 
-    async fn retrieve_all(&self) -> Result<Vec<E>, Self::RepoError> {
-        let coll = self.collection::<E>();
+    async fn retrieve_all(&self) -> Result<Vec<R>, Self::RepoError> {
+        self.find_all(&R::Filter::default()).await
+    }
+
+    async fn retrieve_page(&self, offset: usize, limit: usize) -> Result<Vec<R>, Self::RepoError> {
+        self.find_page(&R::Filter::default(), offset, limit).await
+    }
+
+    async fn find_all(&self, filter: &R::Filter) -> Result<Vec<R>, Self::RepoError> {
+        let filter = to_document(filter)?;
+        let coll = self.collection::<R>();
+
         match self.session {
             Some(ref session) => {
                 let mut session_guard = session.lock().await;
                 let session = session_guard.deref_mut();
-                let mut cursor = coll.find_with_session(None, None, session).await?;
+                let mut cursor = coll.find_with_session(filter, None, session).await?;
                 let mut docs = vec![];
                 while let Some(doc) = cursor.next(session).await {
                     docs.push(doc?);
@@ -144,7 +180,42 @@ where
                 Ok(docs)
             }
             None => {
-                let mut cursor = coll.find(None, None).await?;
+                let mut cursor = coll.find(filter, None).await?;
+                let mut docs = vec![];
+                while let Some(doc) = cursor.next().await {
+                    docs.push(doc?);
+                }
+                Ok(docs)
+            }
+        }
+    }
+
+    async fn find_page(
+        &self,
+        filter: &R::Filter,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<R>, Self::RepoError> {
+        let filter = to_document(filter)?;
+        let options = FindOptions::builder()
+            .skip(offset as u64)
+            .limit(limit as i64)
+            .build();
+        let coll = self.collection::<R>();
+
+        match self.session {
+            Some(ref session) => {
+                let mut session_guard = session.lock().await;
+                let session = session_guard.deref_mut();
+                let mut cursor = coll.find_with_session(filter, options, session).await?;
+                let mut docs = vec![];
+                while let Some(doc) = cursor.next(session).await {
+                    docs.push(doc?);
+                }
+                Ok(docs)
+            }
+            None => {
+                let mut cursor = coll.find(filter, options).await?;
                 let mut docs = vec![];
                 while let Some(doc) = cursor.next().await {
                     docs.push(doc?);
@@ -155,19 +226,18 @@ where
     }
 }
 
-impl<E, S> Clone for MongoRepo<E, S>
+impl<R: MongoReposable> Clone for MongoRepo<R>
 where
-    E: Entity + Serialize + DeserializeOwned + Unpin + Send + Sync,
-    S: Serialize + Send + Sync,
+    R: DeserializeOwned,
+    R::Spec: Serialize,
+    R::Patch: Serialize,
+    R::Filter: Serialize,
 {
     fn clone(&self) -> Self {
         Self {
-            db_name: self.db_name.clone(),
-            collection_name: self.collection_name.clone(),
             client: self.client.clone(),
             session: self.session.clone(),
-            _entity: self._entity,
-            _spec: self._spec,
+            _reposable: PhantomData,
         }
     }
 }
@@ -175,6 +245,7 @@ where
 #[derive(Debug)]
 pub enum MongoRepoError {
     MongoError(mongodb::error::ErrorKind),
+    BsonSerError(mongodb::bson::ser::Error),
 }
 
 impl Error for MongoRepoError {}
@@ -183,6 +254,7 @@ impl Display for MongoRepoError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::MongoError(e) => write!(f, "MongoError({})", e),
+            Self::BsonSerError(e) => write!(f, "BsonSerError({})", e),
         }
     }
 }
@@ -190,5 +262,11 @@ impl Display for MongoRepoError {
 impl From<mongodb::error::Error> for MongoRepoError {
     fn from(e: mongodb::error::Error) -> Self {
         MongoRepoError::MongoError(*e.kind)
+    }
+}
+
+impl From<mongodb::bson::ser::Error> for MongoRepoError {
+    fn from(e: mongodb::bson::ser::Error) -> Self {
+        MongoRepoError::BsonSerError(e)
     }
 }
