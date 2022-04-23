@@ -1,10 +1,10 @@
-use crate::common::id::Id;
-use crate::common::name::Name;
-use crate::items::item::{Item, ItemSize};
+pub use filter::*;
+pub use patch::*;
+pub use spec::*;
+
+use crate::items::item::Item;
 use crate::storage::mongo_repo::{MongoRepo, MongoReposable};
-use crate::storage::repo::{Filter, Patch, Reposable};
-use mongodb::bson::Document;
-use serde::Serialize;
+use crate::storage::repo::Reposable;
 
 const MONGO_DB: &str = "repotest";
 const MONGO_COLLECTION: &str = "items";
@@ -17,26 +17,6 @@ impl Reposable for Item {
     type Filter = ItemFilter;
 }
 
-#[derive(Serialize)]
-pub struct ItemSpec {
-    name: Name,
-    size: ItemSize,
-}
-
-#[derive(Serialize)]
-pub struct ItemPatch {
-    id: Id,
-    name: Option<Name>,
-    size: Option<ItemSize>,
-}
-
-#[derive(Default, Serialize)]
-pub struct ItemFilter {
-    id: Option<Id>,
-    name: Option<Name>,
-    size: Option<ItemSize>,
-}
-
 impl MongoReposable for Item {
     fn db_name() -> &'static str {
         MONGO_DB
@@ -47,86 +27,137 @@ impl MongoReposable for Item {
     }
 }
 
-impl ItemSpec {
-    pub fn new(name: Name, size: ItemSize) -> Self {
-        Self { name, size }
+mod spec {
+    use crate::{common::name::Name, items::item::ItemSize};
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    pub struct ItemSpec {
+        name: Name,
+        size: ItemSize,
     }
 
-    pub fn name(&self) -> &Name {
-        &self.name
-    }
+    impl ItemSpec {
+        pub fn new(name: Name, size: ItemSize) -> Self {
+            Self { name, size }
+        }
 
-    pub fn name_mut(&mut self) -> &mut Name {
-        &mut self.name
-    }
+        pub fn name(&self) -> &Name {
+            &self.name
+        }
 
-    pub fn size(&self) -> &ItemSize {
-        &self.size
-    }
+        pub fn name_mut(&mut self) -> &mut Name {
+            &mut self.name
+        }
 
-    pub fn size_mut(&mut self) -> &mut ItemSize {
-        &mut self.size
-    }
-}
+        pub fn size(&self) -> &ItemSize {
+            &self.size
+        }
 
-impl ItemPatch {
-    pub fn name(&self) -> &Option<Name> {
-        &self.name
-    }
-
-    pub fn name_mut(&mut self) -> &mut Option<Name> {
-        &mut self.name
-    }
-
-    pub fn size(&self) -> &Option<ItemSize> {
-        &self.size
-    }
-
-    pub fn size_mut(&mut self) -> &mut Option<ItemSize> {
-        &mut self.size
+        pub fn size_mut(&mut self) -> &mut ItemSize {
+            &mut self.size
+        }
     }
 }
 
-impl Patch for ItemPatch {
-    fn update_id(&self) -> &Id {
-        &self.id
+mod patch {
+    use crate::{
+        common::{id::Id, name::Name},
+        items::item::ItemSize,
+        storage::repo::Patch,
+    };
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    pub struct ItemPatch {
+        #[serde(skip)]
+        id: Id,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<Name>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size: Option<ItemSize>,
+    }
+
+    impl ItemPatch {
+        pub fn new(id: Id) -> Self {
+            Self {
+                id,
+                name: None,
+                size: None,
+            }
+        }
+
+        pub fn name(&self) -> &Option<Name> {
+            &self.name
+        }
+
+        pub fn name_mut(&mut self) -> &mut Option<Name> {
+            &mut self.name
+        }
+
+        pub fn size(&self) -> &Option<ItemSize> {
+            &self.size
+        }
+
+        pub fn size_mut(&mut self) -> &mut Option<ItemSize> {
+            &mut self.size
+        }
+    }
+
+    impl Patch for ItemPatch {
+        fn update_id(&self) -> &Id {
+            &self.id
+        }
     }
 }
 
-impl From<ItemPatch> for Document {
-    fn from(_: ItemPatch) -> Self {
-        todo!()
-    }
-}
+mod filter {
+    use crate::{
+        common::{id::Id, name::Name},
+        items::item::ItemSize,
+        storage::repo::Filter,
+    };
+    use serde::Serialize;
 
-impl ItemFilter {
-    pub fn id(&self) -> &Option<Id> {
-        &self.id
-    }
-
-    pub fn id_mut(&mut self) -> &mut Option<Id> {
-        &mut self.id
-    }
-
-    pub fn name(&self) -> &Option<Name> {
-        &self.name
-    }
-
-    pub fn name_mut(&mut self) -> &mut Option<Name> {
-        &mut self.name
+    #[derive(Default, Serialize)]
+    pub struct ItemFilter {
+        #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+        id: Option<Id>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<Name>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size: Option<ItemSize>,
     }
 
-    pub fn size(&self) -> &Option<ItemSize> {
-        &self.size
+    impl ItemFilter {
+        pub fn id(&self) -> &Option<Id> {
+            &self.id
+        }
+
+        pub fn id_mut(&mut self) -> &mut Option<Id> {
+            &mut self.id
+        }
+
+        pub fn name(&self) -> &Option<Name> {
+            &self.name
+        }
+
+        pub fn name_mut(&mut self) -> &mut Option<Name> {
+            &mut self.name
+        }
+
+        pub fn size(&self) -> &Option<ItemSize> {
+            &self.size
+        }
+
+        pub fn size_mut(&mut self) -> &mut Option<ItemSize> {
+            &mut self.size
+        }
     }
 
-    pub fn size_mut(&mut self) -> &mut Option<ItemSize> {
-        &mut self.size
-    }
-}
-
-impl Filter for ItemFilter {
-    fn by_id(&mut self, id: &Id) {
-        self.id = Some(id.clone())
+    impl Filter for ItemFilter {
+        fn by_id(&mut self, id: &Id) {
+            self.id = Some(id.clone())
+        }
     }
 }
