@@ -99,11 +99,11 @@ pub trait Reposable: Entity {
 /// A thing that can patch update a reposable thing stored in a repository.
 pub trait Patch {
     /// Returns the ID of the thing for which this patch is an update.
-    fn update_id(&self) -> &Id;
+    fn id(&self) -> &Id;
 }
 
 /// A thing that can filter reposable things stored in a repository.
 pub trait Filter: Default {
     /// Modifies this filter to filter for the thing or things with the provided identity.
-    fn by_id(&mut self, id: &Id);
+    fn id_mut(&mut self) -> &mut Option<Id>;
 }

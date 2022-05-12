@@ -40,7 +40,7 @@ mod controller {
         let items_repo = ctx.items_repo();
         match items_repo.update(&patch).await? {
             true => {
-                if let Some(item) = items_repo.retrieve(patch.update_id()).await? {
+                if let Some(item) = items_repo.retrieve(patch.id()).await? {
                     //ctx.commit_transaction().await;
                     Ok(ItemNode::from(item))
                 } else {
@@ -229,6 +229,7 @@ mod find {
     use crate::{
         common::{id::Id, name::Name},
         items::item_repo::ItemFilter,
+        storage::repo::Filter,
     };
 
     #[derive(juniper::GraphQLInputObject)]

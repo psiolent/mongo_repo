@@ -105,7 +105,7 @@ mod patch {
     }
 
     impl Patch for ItemPatch {
-        fn update_id(&self) -> &Id {
+        fn id(&self) -> &Id {
             &self.id
         }
     }
@@ -134,10 +134,6 @@ mod filter {
             &self.id
         }
 
-        pub fn id_mut(&mut self) -> &mut Option<Id> {
-            &mut self.id
-        }
-
         pub fn name(&self) -> &Option<Name> {
             &self.name
         }
@@ -156,8 +152,8 @@ mod filter {
     }
 
     impl Filter for ItemFilter {
-        fn by_id(&mut self, id: &Id) {
-            self.id = Some(id.clone())
+        fn id_mut(&mut self) -> &mut Option<Id> {
+            &mut self.id
         }
     }
 }

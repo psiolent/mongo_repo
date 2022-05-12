@@ -104,7 +104,7 @@ where
 
     async fn update(&self, patch: &R::Patch) -> Result<bool, Self::RepoError> {
         let mut query = R::Filter::default();
-        query.by_id(patch.update_id());
+        *query.id_mut() = Some(patch.id().clone());
         let query = to_document(&query)?;
         let update = doc! { "$set": to_document(patch)? };
         let coll = self.collection::<R>();
@@ -124,7 +124,7 @@ where
 
     async fn delete(&self, id: &Id) -> Result<bool, Self::RepoError> {
         let mut query = R::Filter::default();
-        query.by_id(id);
+        *query.id_mut() = Some(id.clone());
         let query = to_document(&query)?;
         let coll = self.collection::<R>();
 
@@ -142,7 +142,7 @@ where
 
     async fn retrieve(&self, id: &Id) -> Result<Option<R>, Self::RepoError> {
         let mut filter = R::Filter::default();
-        filter.by_id(id);
+        *filter.id_mut() = Some(id.clone());
         let filter = to_document(&filter)?;
         let coll = self.collection::<R>();
 
