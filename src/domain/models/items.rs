@@ -2,33 +2,72 @@ pub use filter::*;
 pub use patch::*;
 pub use spec::*;
 
-use crate::items::item::Item;
-use crate::storage::mongo_repo::{MongoRepo, MongoReposable};
-use crate::storage::repo::Reposable;
+use serde::{Deserialize, Serialize};
+
+use crate::common::{entity::Entity, id::Id, name::Name};
 
 const MONGO_DB: &str = "repotest";
 const MONGO_COLLECTION: &str = "items";
 
-pub type MongoItemsRepo = MongoRepo<Item>;
-
-impl Reposable for Item {
-    type Spec = ItemSpec;
-    type Patch = ItemPatch;
-    type Filter = ItemFilter;
+#[derive(Deserialize)]
+pub struct Item {
+    #[serde(rename = "_id")]
+    id: Id,
+    name: Name,
+    size: ItemSize,
 }
 
-impl MongoReposable for Item {
-    fn db_name() -> &'static str {
-        MONGO_DB
+#[derive(Serialize, Deserialize)]
+pub enum ItemSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl Item {
+    pub fn new(id: Id, name: Name, size: ItemSize) -> Self {
+        Self { id, name, size }
     }
 
-    fn collection_name() -> &'static str {
-        MONGO_COLLECTION
+    pub fn name(&self) -> &Name {
+        &self.name
+    }
+
+    pub fn size(&self) -> &ItemSize {
+        &self.size
+    }
+}
+
+impl Entity for Item {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+}
+
+mod repo {
+    use super::*;
+    use crate::storage::{mongo_repo::MongoReposable, repo::Reposable};
+
+    impl Reposable for Item {
+        type Spec = ItemSpec;
+        type Patch = ItemPatch;
+        type Filter = ItemFilter;
+    }
+
+    impl MongoReposable for Item {
+        fn db_name() -> &'static str {
+            MONGO_DB
+        }
+
+        fn collection_name() -> &'static str {
+            MONGO_COLLECTION
+        }
     }
 }
 
 mod spec {
-    use crate::{common::name::Name, items::item::ItemSize};
+    use super::*;
+    use crate::common::name::Name;
     use serde::Serialize;
 
     #[derive(Serialize)]
@@ -61,9 +100,9 @@ mod spec {
 }
 
 mod patch {
+    use super::*;
     use crate::{
         common::{id::Id, name::Name},
-        items::item::ItemSize,
         storage::repo::Patch,
     };
     use serde::Serialize;
@@ -112,9 +151,9 @@ mod patch {
 }
 
 mod filter {
+    use super::*;
     use crate::{
         common::{id::Id, name::Name},
-        items::item::ItemSize,
         storage::repo::Filter,
     };
     use serde::Serialize;

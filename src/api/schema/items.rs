@@ -9,8 +9,8 @@ mod controller {
     use crate::{
         api::context::Context,
         common::id::Id,
-        items::item_repo::{ItemFilter, ItemPatch, ItemSpec},
-        storage::repo::{Patch, Repo},
+        domain::models::items::{ItemFilter, ItemPatch, ItemSpec},
+        domain::Domain,
     };
     use juniper::FieldResult;
     use std::str::FromStr;
@@ -20,15 +20,7 @@ mod controller {
         input: CreateItemInput,
     ) -> FieldResult<ItemNode> {
         let spec = ItemSpec::try_from(input)?;
-        //let ctx = ctx.start_transaction().await;
-        let items_repo = ctx.items_repo();
-        let id = items_repo.create(&spec).await?;
-        if let Some(item) = items_repo.retrieve(&id).await? {
-            //ctx.commit_transaction().await;
-            Ok(ItemNode::from(item))
-        } else {
-            Err(String::from("item could not be retrieved following creation").into())
-        }
+        Ok(ItemNode::from(ctx.domain().create_item(&spec).await?))
     }
 
     pub async fn update_item_from_input(
@@ -36,18 +28,10 @@ mod controller {
         input: UpdateItemInput,
     ) -> FieldResult<ItemNode> {
         let patch = ItemPatch::try_from(input)?;
-        //let ctx = ctx.start_transaction().await;
-        let items_repo = ctx.items_repo();
-        match items_repo.update(&patch).await? {
-            true => {
-                if let Some(item) = items_repo.retrieve(patch.id()).await? {
-                    //ctx.commit_transaction().await;
-                    Ok(ItemNode::from(item))
-                } else {
-                    Err(String::from("item could not be retrieved following update").into())
-                }
-            }
-            false => Err(String::from("no item exists with the provided ID").into()),
+        if let Some(item) = ctx.domain().update_item(&patch).await? {
+            Ok(ItemNode::from(item))
+        } else {
+            Err(String::from("no item exists with the provided ID").into())
         }
     }
 
@@ -55,13 +39,8 @@ mod controller {
         let id = id
             .parse::<Id>()
             .map_err(|_| String::from("the provided ID was invalid"))?;
-        //let ctx = ctx.start_transaction().await;
-        let items_repo = ctx.items_repo();
-        match items_repo.delete(&id).await? {
-            true => {
-                //ctx.commit_transaction().await;
-                Ok(())
-            }
+        match ctx.domain().delete_item(&id).await? {
+            true => Ok(()),
             false => Err(String::from("no item exists with the provided ID").into()),
         }
     }
@@ -70,11 +49,12 @@ mod controller {
         ctx: &Context,
         filter: Option<ItemFilterInput>,
     ) -> FieldResult<Vec<ItemNode>> {
-        let items_repo = ctx.items_repo();
         let items = if let Some(filter) = filter {
-            items_repo.find_all(&ItemFilter::try_from(filter)?).await?
+            ctx.domain()
+                .find_items(&ItemFilter::try_from(filter)?)
+                .await?
         } else {
-            items_repo.retrieve_all().await?
+            ctx.domain().all_items().await?
         };
         let item_nodes = items.into_iter().map(ItemNode::from).collect();
         Ok(item_nodes)
@@ -82,7 +62,7 @@ mod controller {
 
     pub async fn item_node(ctx: &Context, id: String) -> FieldResult<Option<ItemNode>> {
         let id = Id::from_str(&id)?;
-        let item = ctx.items_repo().retrieve(&id).await?;
+        let item = ctx.domain().item(&id).await?;
         Ok(item.map(ItemNode::from))
     }
 }
@@ -91,7 +71,7 @@ mod node {
     use crate::{
         api::context::Context,
         common::entity::Entity,
-        items::item::{self, Item},
+        domain::models::items::{self, Item},
     };
     use juniper::graphql_object;
 
@@ -133,22 +113,22 @@ mod node {
         }
     }
 
-    impl From<&item::ItemSize> for ItemSize {
-        fn from(size: &item::ItemSize) -> Self {
+    impl From<&items::ItemSize> for ItemSize {
+        fn from(size: &items::ItemSize) -> Self {
             match size {
-                item::ItemSize::Small => ItemSize::Small,
-                item::ItemSize::Medium => ItemSize::Medium,
-                item::ItemSize::Large => ItemSize::Large,
+                items::ItemSize::Small => ItemSize::Small,
+                items::ItemSize::Medium => ItemSize::Medium,
+                items::ItemSize::Large => ItemSize::Large,
             }
         }
     }
 
-    impl From<&ItemSize> for item::ItemSize {
+    impl From<&ItemSize> for items::ItemSize {
         fn from(size: &ItemSize) -> Self {
             match size {
-                ItemSize::Small => item::ItemSize::Small,
-                ItemSize::Medium => item::ItemSize::Medium,
-                ItemSize::Large => item::ItemSize::Large,
+                ItemSize::Small => items::ItemSize::Small,
+                ItemSize::Medium => items::ItemSize::Medium,
+                ItemSize::Large => items::ItemSize::Large,
             }
         }
     }
@@ -158,7 +138,7 @@ mod create {
     use super::ItemSize;
     use crate::{
         common::name::Name,
-        items::{item, item_repo::ItemSpec},
+        domain::models::items::{self, ItemSpec},
     };
 
     #[derive(juniper::GraphQLInputObject)]
@@ -175,7 +155,7 @@ mod create {
 
         fn try_from(input: CreateItemInput) -> Result<Self, Self::Error> {
             match input.name.parse::<Name>() {
-                Ok(name) => Ok(ItemSpec::new(name, item::ItemSize::from(&input.size))),
+                Ok(name) => Ok(ItemSpec::new(name, items::ItemSize::from(&input.size))),
                 Err(_) => Err("name cannot be empty".into()),
             }
         }
@@ -185,7 +165,7 @@ mod create {
 mod update {
     use crate::{
         common::{id::Id, name::Name},
-        items::item_repo::ItemPatch,
+        domain::models::items::ItemPatch,
     };
 
     use super::ItemSize;
@@ -228,7 +208,7 @@ mod find {
     use super::ItemSize;
     use crate::{
         common::{id::Id, name::Name},
-        items::item_repo::ItemFilter,
+        domain::models::items::ItemFilter,
         storage::repo::Filter,
     };
 

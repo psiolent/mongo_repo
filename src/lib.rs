@@ -1,4 +1,4 @@
 pub mod api;
 pub mod common;
-pub mod items;
+pub mod domain;
 pub mod storage;
